@@ -1,3 +1,6 @@
+/*jshint globalstrict: true */
+/*global CKEDITOR*/
+
 /**
  * @license Copyright (c) 2003-2015, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md or http://ckeditor.com/license
@@ -44,7 +47,7 @@
 		// Handles the event when the "Type" selection box is changed.
 		var linkTypeChanged = function() {
 				var dialog = this.getDialog(),
-					partIds = [ 'urlOptions', 'anchorOptions', 'emailOptions' ],
+					partIds = [ 'urlOptions', 'cmspageOptions', 'anchorOptions', 'emailOptions' ],
 					typeValue = this.getValue(),
 					uploadTab = dialog.definition.getContents( 'upload' ),
 					uploadInitiallyHidden = uploadTab && uploadTab.hidden;
@@ -122,6 +125,7 @@
 					'default': 'url',
 					items: [
 						[ linkLang.toUrl, 'url' ],
+						[ "Seite im CMS", 'cmspage' ],
 						[ linkLang.toAnchor, 'anchor' ],
 						[ linkLang.toEmail, 'email' ]
 					],
@@ -242,6 +246,40 @@
 					} ]
 				},
 				{
+					type: 'vbox',
+					id: 'cmspageOptions',
+					children: [
+						{
+						id: 'cmspage',
+						type: 'select',
+						style: 'max-width: 350px',
+						label: "Seite",
+						items: [""],
+						setup: function( data ) {
+							var select = this, setupData = data;
+							select.clear();
+							function addOptionsForPages(pages) {
+								pages.each(function(page) {
+									var label = "·\u00a0".repeat(page.depth - 1) + page.title;
+									select.add(label, page.id);
+									addOptionsForPages(page.children);
+								});
+							}
+							$.getJSON("/backend/pages.json", function(data) {
+								addOptionsForPages(data.children);
+								if (setupData.cmspage) {
+									select.setValue(setupData.cmspage.id);
+								}
+							});
+						},
+						commit: function( data ) {
+							var title = $(this.getInputElement().$).find("option:selected").text().replace(/^(·\u00a0)+/, "");
+							data.cmspage = { id: this.getValue(), title: title };
+						}
+					}
+					]
+				},
+					{
 					type: 'vbox',
 					id: 'anchorOptions',
 					width: 260,
@@ -794,8 +832,13 @@
 					element = null;
 				}
 
-				var data = plugin.parseLinkAttributes( editor, element );
-
+				var data = plugin.parseLinkAttributes( editor, element ), matches;
+				if (data.type == "url" && (matches = data.url.url.match(/^cmspage:\/\/(.+)/))) {
+					data.type = "cmspage";
+					data.cmspage = { id: matches[1] };
+					data.url = { protocol: "http://", url: "" };
+				}
+				
 				// Record down the selected element in the dialog.
 				this._.selectedElement = element;
 
@@ -806,9 +849,17 @@
 
 				// Collect data from fields.
 				this.commitContent( data );
+				
+				// Wir müssen getLinkAttributes() vorgaukeln, dass einfach eine URL ausgewählt wurde (halt mit Protokoll "cmspage://")
+				var dataCopy = $.extend({}, data);
+				if (data.type == "cmspage") {
+					dataCopy.type = "url";
+					dataCopy.url.protocol = "cmspage://";
+					dataCopy.url.url = data.cmspage.id;
+				}
 
 				var selection = editor.getSelection(),
-					attributes = plugin.getLinkAttributes( editor, data );
+					attributes = plugin.getLinkAttributes( editor, dataCopy );
 
 				if ( !this._.selectedElement ) {
 					var range = selection.getRanges()[ 0 ];
@@ -817,7 +868,7 @@
 					if ( range.collapsed ) {
 						// Short mailto link text view (#5736).
 						var text = new CKEDITOR.dom.text( data.type == 'email' ?
-							data.email.address : attributes.set[ 'data-cke-saved-href' ], editor.document );
+							data.email.address : (data.type == 'cmspage' ? data.cmspage.title : attributes.set[ 'data-cke-saved-href' ]), editor.document );
 						range.insertNode( text );
 						range.selectNodeContents( text );
 					}
